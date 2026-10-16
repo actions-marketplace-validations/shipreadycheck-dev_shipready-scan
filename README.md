@@ -1,6 +1,10 @@
 # Ship-Ready Scan
 
+[![Self-test](https://github.com/shipreadycheck-dev/shipready-scan/actions/workflows/selftest.yml/badge.svg)](https://github.com/shipreadycheck-dev/shipready-scan/actions/workflows/selftest.yml)
+
 **Find the security mistakes AI coding tools make, before you launch.**
+
+![Ship-Ready Scan catching an OpenAI key in code on git push](assets/shipready-demo.gif)
 
 Built your app with Lovable, Bolt, Cursor, Claude Code, Replit or v0? This free scanner checks your project for the mistakes behind real leaks: exposed API keys, Supabase tables open to the public, fake-able Stripe payments, and more. It explains each problem in plain English.
 
@@ -55,6 +59,20 @@ Each run adds the problems as comments on the exact lines in your code, and a su
 ```
 
 The action only reads your files. It never runs your code, needs no secrets, and sends nothing anywhere.
+
+## Show it on your repo
+
+Once the Action is set up, add this badge to the top of your README. It shows whether your latest scan passed:
+
+```markdown
+[![Ship-Ready Scan](https://github.com/YOUR-NAME/YOUR-REPO/actions/workflows/ship-ready-scan.yml/badge.svg)](https://github.com/shipreadycheck-dev/shipready-scan)
+```
+
+Replace `YOUR-NAME/YOUR-REPO` with your own. The badge only works if your workflow file is named `ship-ready-scan.yml`, like the example above.
+
+Or paste this into your coding agent:
+
+> Add a status badge for the `ship-ready-scan.yml` GitHub Actions workflow to the top of README.md. Link the badge to https://github.com/shipreadycheck-dev/shipready-scan.
 
 **Not comfortable with a terminal?** Paste this into your coding agent (Cursor, Claude Code and so on):
 
