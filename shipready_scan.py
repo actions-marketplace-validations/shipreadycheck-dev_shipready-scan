@@ -69,8 +69,12 @@ SECRET_PATTERNS = [
 ]
 
 JWT_RE = re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}")
-PUBLIC_PREFIX_SECRET_RE = re.compile(
-    r"\b(NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|PUBLIC_)[A-Z0-9_]*(SECRET|SERVICE_ROLE|PRIVATE|OPENAI|ANTHROPIC|GEMINI|STRIPE_SECRET|DATABASE_URL|PASSWORD)[A-Z0-9_]*")
+_PUB_NAME = r"(NEXT_PUBLIC_|VITE_|REACT_APP_|EXPO_PUBLIC_|PUBLIC_)[A-Z0-9_]*(?:SECRET|SERVICE_ROLE|PRIVATE|OPENAI|ANTHROPIC|GEMINI|DATABASE_URL|PASSWORD)[A-Z0-9_]*"
+# Only real env-var usage: `KEY=...` lines (env files, shell, CI) or `env.KEY` / `env["KEY"]` in code.
+PUBLIC_PREFIX_SECRET_RES = [
+    re.compile(r"^[ \t]*(?:export[ \t]+)?(?P<name>" + _PUB_NAME + r")[ \t]*[=:]", re.M),
+    re.compile(r"env(?:\.|\[[\"'])(?P<name>" + _PUB_NAME + r")\b"),
+]
 
 
 def is_frontend(rel):
@@ -173,13 +177,15 @@ def scan(root):
                     mask(m.group(0)))
 
         # secret under public prefix
-        for m in PUBLIC_PREFIX_SECRET_RE.finditer(text):
-            add(findings, "secret.public_prefix", "Critical", "Secret-sounding variable exposed to the browser",
-                relp, line_of(text, m.start()),
-                f"Variables starting with {m.group(1)} are bundled into the website, so anyone can read them.",
-                "Rename it without the public prefix and only read it in server code.", m.group(0))
+        envlike = base.startswith(".env") or base.endswith((".yml", ".yaml", ".toml", ".sh")) or base == "Dockerfile"
+        for rx in (PUBLIC_PREFIX_SECRET_RES if envlike else PUBLIC_PREFIX_SECRET_RES[1:]):
+            for m in rx.finditer(text):
+                add(findings, "secret.public_prefix", "Critical", "Secret-sounding variable exposed to the browser",
+                    relp, line_of(text, m.start("name")),
+                    f"Variables starting with {m.group(2)} are bundled into the website, so anyone can read them.",
+                    "Rename it without the public prefix and only read it in server code.", m.group("name"))
 
-        if "supabase" in text.lower():
+        if re.search(r"@supabase/|from supabase import|supabase_flutter|supabase-py|\bsupabase/migrations\b", text) or relp.startswith("supabase/"):
             has_supabase = True
         if base.endswith(".sql"):
             joined_sql.append((relp, text))
@@ -200,7 +206,7 @@ def scan(root):
         low = text.lower()
         if "stripe" in low:
             has_stripe = True
-            if "webhook" in low or "stripe-signature" in low or "checkout.session.completed" in low:
+            if "webhook" in low or "webhook" in relp.lower() or "stripe-signature" in low or "checkout.session.completed" in low:
                 webhook_files.append((relp, text))
             m = re.search(r"(unit_amount|amount)\s*:\s*(req\.body|body|request\.json|params|query)\.", text)
             if m:
@@ -326,6 +332,10 @@ def main():
     ap = argparse.ArgumentParser(description="Ship-Ready Scan: find common security mistakes in AI-built apps")
     ap.add_argument("path")
     ap.add_argument("--json", help="write findings to this JSON file")
+    ap.add_argument("--fail-on", choices=["critical", "high", "medium", "low", "none"], default="none",
+                    help="exit with code 1 if any finding is at or above this severity (default: none)")
+    ap.add_argument("--github", action="store_true",
+                    help="GitHub Actions mode: add inline annotations and a job summary")
     a = ap.parse_args()
     if not os.path.isdir(a.path):
         sys.exit(f"Not a folder: {a.path}")
@@ -333,6 +343,8 @@ def main():
     counts = {}
     for f in findings:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+    if a.github:
+        github_output(findings, n, counts, a.path)
     print(f"Scanned {n} files. " + ", ".join(f"{k}: {v}" for k, v in counts.items()) if findings else f"Scanned {n} files. No findings.")
     for f in findings:
         loc = f"{f['file']}:{f['line']}" if f["line"] else f["file"]
@@ -345,6 +357,56 @@ def main():
     if a.json:
         with open(a.json, "w") as out:
             json.dump({"files_scanned": n, "counts": counts, "findings": findings}, out, indent=2)
+    rank = {"Critical": 4, "High": 3, "Medium": 2, "Low": 1}
+    limit = {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(a.fail_on)
+    if limit and any(rank.get(f["severity"], 0) >= limit for f in findings):
+        print(f"\nFailing: found issues at or above '{a.fail_on}' severity.")
+        sys.exit(1)
+
+
+def _gh_escape(s, prop=False):
+    s = str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if prop:
+        s = s.replace(":", "%3A").replace(",", "%2C")
+    return s
+
+
+def github_output(findings, n, counts, root):
+    """Inline annotations on the changed files, plus a readable job summary."""
+    level = {"Critical": "error", "High": "error", "Medium": "warning", "Low": "notice"}
+    prefix = os.path.relpath(os.path.abspath(root), os.getcwd())
+    for f in findings:
+        kind = level.get(f["severity"], "notice")
+        props = [f"title={_gh_escape(f['severity'] + ': ' + f['title'], True)}"]
+        if not f["file"].startswith("("):
+            path = f["file"] if prefix == "." else os.path.join(prefix, f["file"])
+            props.insert(0, f"file={_gh_escape(path, True)}")
+            if f["line"]:
+                props.insert(1, f"line={f['line']}")
+        print(f"::{kind} {','.join(props)}::{_gh_escape(f['why'] + ' Fix: ' + f['fix'])}")
+
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    order = ["Critical", "High", "Medium", "Low", "Could not check"]
+    lines = ["## Ship-Ready Scan", ""]
+    if not findings:
+        lines += [f"Scanned {n} files. **No issues found.**", "",
+                  "A clean scan means none of the common patterns were found. It can't prove the app is secure."]
+    else:
+        lines += [f"Scanned {n} files.", "",
+                  "| " + " | ".join(order) + " |", "|" + "---|" * len(order),
+                  "| " + " | ".join(str(counts.get(k, 0)) for k in order) + " |", "",
+                  "| Severity | Issue | Where | How to fix |", "|---|---|---|---|"]
+        for f in findings:
+            loc = f"`{f['file']}:{f['line']}`" if f["line"] else f"`{f['file']}`"
+            fix = f["fix"].replace("|", "\\|")
+            lines.append(f"| {f['severity']} | {f['title'].replace('|', '/')} | {loc} | {fix} |")
+    lines += ["", "---",
+              "Want a person to review what patterns can't see, with plain-English fixes and copy-paste prompts "
+              "for your coding agent? [Ship-Ready Check](https://shipreadycheck-dev.github.io)"]
+    with open(summary_path, "a") as out:
+        out.write("\n".join(lines) + "\n")
 
 
 if __name__ == "__main__":

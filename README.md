@@ -20,6 +20,42 @@ python3 shipready_scan.py path/to/your-project
 
 Want the results as a file? Add `--json results.json`.
 
+## Run it on every push (GitHub Action)
+
+Catch a leaked key before it ever ships. Create `.github/workflows/ship-ready-scan.yml` in your repo with:
+
+```yaml
+name: Ship-Ready Scan
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shipreadycheck-dev/shipready-scan@v1
+```
+
+Or just paste this into your coding agent:
+
+> Add a GitHub Actions workflow at `.github/workflows/ship-ready-scan.yml` that runs on push and pull_request, checks out the code with actions/checkout@v4, and then runs `shipreadycheck-dev/shipready-scan@v1`. Give it `permissions: contents: read`.
+
+Each run adds the problems as comments on the exact lines in your code, and a summary table on the run page. By default the check fails only on **Critical** issues, like a secret key in your code.
+
+| Option | Default | What it does |
+|---|---|---|
+| `path` | `.` | Folder to scan |
+| `fail-on` | `critical` | Fail the check at this severity or worse: `critical`, `high`, `medium`, `low` or `none` |
+
+```yaml
+      - uses: shipreadycheck-dev/shipready-scan@v1
+        with:
+          fail-on: high
+```
+
+The action only reads your files. It never runs your code, needs no secrets, and sends nothing anywhere.
+
 **Not comfortable with a terminal?** Paste this into your coding agent (Cursor, Claude Code and so on):
 
 > Download https://raw.githubusercontent.com/shipreadycheck-dev/shipready-scan/main/shipready_scan.py and run it with python3 on this project. Explain each finding to me in plain English. Do not change anything yet.

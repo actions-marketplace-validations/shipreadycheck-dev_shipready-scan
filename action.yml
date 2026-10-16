@@ -1,0 +1,26 @@
+name: Ship-Ready Security Scan
+description: Find exposed API keys, open Supabase tables and fake-able Stripe payments in apps built with AI coding tools.
+author: Ship-Ready Check
+branding:
+  icon: shield
+  color: yellow
+
+inputs:
+  path:
+    description: Folder to scan, relative to the repository root.
+    required: false
+    default: "."
+  fail-on:
+    description: Fail the check if any issue is at or above this severity. One of critical, high, medium, low, none.
+    required: false
+    default: critical
+
+runs:
+  using: composite
+  steps:
+    - name: Run Ship-Ready Scan
+      shell: bash
+      env:
+        SRS_PATH: ${{ inputs.path }}
+        SRS_FAIL_ON: ${{ inputs.fail-on }}
+      run: python3 "${GITHUB_ACTION_PATH}/shipready_scan.py" "$SRS_PATH" --github --fail-on "$SRS_FAIL_ON"
